@@ -1,5 +1,5 @@
 # File: main.py
-# (Modified to load embedding model at startup)
+# (Modified to load embedding model at startup and await async pipeline run)
 
 import os
 import tempfile
@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from groq import AsyncGroq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+import torch # Import torch to check for CUDA availability
 
 from dotenv import load_dotenv
 
@@ -61,8 +62,11 @@ async def startup_event():
     """
     global embed_model_instance
     print(f"Loading embedding model '{EMBEDDING_MODEL_NAME}' at startup...")
-    # Use asyncio.to_thread for the synchronous model loading to not block the event loop
-    embed_model_instance = await asyncio.to_thread(HuggingFaceEmbedding, model_name=EMBEDDING_MODEL_NAME)
+    # Check for GPU availability and use it if possible
+    # Assuming 16GB VRAM, a standard device check is sufficient
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    embed_model_instance = await asyncio.to_thread(HuggingFaceEmbedding, model_name=EMBEDDING_MODEL_NAME, device=device)
     print("Embedding model loaded successfully.")
 
 # --- Async Groq Generation Function ---
@@ -178,8 +182,9 @@ async def run_rag_pipeline(request: RunRequest):
 
         # 2. Initialize and Run the Pipeline (Parsing, Node Creation, Embeddings)
         start_time = time.perf_counter()
+        # The Pipeline's run() method is now async, so await it directly
         pipeline = Pipeline(groq_api_key=GROQ_API_KEY, pdf_path=local_pdf_path, embed_model=embed_model_instance)
-        await asyncio.to_thread(pipeline.run)
+        await pipeline.run() # Changed from asyncio.to_thread(pipeline.run)
         end_time = time.perf_counter()
         step_timings["pipeline_setup"] = end_time - start_time
         print(f"Pipeline setup took {step_timings['pipeline_setup']:.2f} seconds.")
@@ -232,5 +237,3 @@ async def run_rag_pipeline(request: RunRequest):
         if local_pdf_path and os.path.exists(local_pdf_path):
             os.unlink(local_pdf_path)
             print(f"Cleaned up temporary PDF file: {local_pdf_path}")
-
-
